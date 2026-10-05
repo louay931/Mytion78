@@ -17,9 +17,12 @@ def fill(el):
             if c.tag!=qn('w:rPr'): r.remove(c)
         t=r.makeelement(qn('w:t'),{}); t.text=data[m.group(1)]; t.set('{http://www.w3.org/XML/1998/namespace}space','preserve'); r.append(t)
         f.addprevious(r); f.getparent().remove(f)
+MODELE='--modele' in sys.argv  # garde les champs « » pour faire le publipostage soi-même dans Word
 docs=[]
 for n in order:
-    d=Document(U+n); fill(d.element.body)
+    d=Document(U+n)
+    if MODELE: docs.append(d); continue
+    fill(d.element.body)
     for s in d.sections:
         for hf in (s.header,s.footer,s.first_page_header,s.first_page_footer,s.even_page_header,s.even_page_footer):
             if not hf.is_linked_to_previous: fill(hf._element)
@@ -51,7 +54,7 @@ for d in docs[1:]:
 body=c.doc.element.body; old=body.find(qn('w:sectPr'))
 for e in final.findall(qn('w:headerReference'))+final.findall(qn('w:footerReference')): final.remove(e)
 old.addprevious(final); body.remove(old)
-out='/home/user/Mytion78/Certificats_'+re.sub(r'\W+','_',data['Client']).strip('_')+'.docx'
+out='/home/user/Mytion78/Modele_Certificats_complet.docx' if MODELE else '/home/user/Mytion78/Certificats_'+re.sub(r'\W+','_',data['Client']).strip('_')+'.docx'
 # docxcompose drops the appended templates' headers/footers: re-attach each template's own ones
 from io import BytesIO
 from docx.opc.constants import RELATIONSHIP_TYPE as RT
