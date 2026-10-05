@@ -60,7 +60,7 @@ for r in range(1, lm.max_row + 1):
             if im.anchor._from.row >= r:
                 im.anchor._from.row += 1; im.anchor.to.row += 1
         lm.cell(r + 1, 1, '6. Demande EGYDE : remplis la section « DEMANDE EGYDE » en bas de Saisie, l’onglet « Demande EGYDE » se remplit tout seul '
-                          '(nom du site client, adresse, CP et ville repris des INFOS CLIENT). Imprime ou envoie cet onglet.')
+                          '(nom du site client, adresse, CP et ville repris des INFOS CLIENT). Bouton « Exporter EGYDE » : crée un fichier séparé à envoyer.')
         style(lm.cell(r + 1, 1), lm.cell(r, 1))
         break
 # Onglet « Demande EGYDE » : copie du formulaire, valeurs remplacées par des liens vers Saisie

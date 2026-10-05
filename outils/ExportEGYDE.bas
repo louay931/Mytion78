@@ -32,6 +32,11 @@ Sub ExporterEGYDE()
     ws.Range("A1").Select
     ws.Name = "Demande EGYDE"
 
+    ' le bouton ne sert à rien dans le fichier envoyé
+    On Error Resume Next
+    ws.Shapes("BoutonExportEGYDE").Delete
+    On Error GoTo 0
+
     ' supprime les noms hérités qui pointent vers d'autres fichiers
     On Error Resume Next
     For i = wb.Names.Count To 1 Step -1
