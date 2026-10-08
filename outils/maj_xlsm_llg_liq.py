@@ -36,6 +36,8 @@ NOUVEAU = '''    If ValeurChamp("T_LIQLIQGAZ") = "X" Then Generer "Modele_Autoco
     End If'''.replace('\n', '\r\n')
 
 ole = olefile.OleFileIO(io.BytesIO(zin.read('xl/vbaProject.bin')))
+from oletools.olevba import VBA_Parser
+DEJA_FAIT = 'Modele_Autocontrole_LLG.docx' in ''.join(c for (_, _, _, c) in VBA_Parser(src).extract_macros())
 dir_data = bytearray(decompress_stream(bytearray(ole.openstream('VBA/dir').read())))
 
 # parcours du flux dir : modules (nom de flux + offset du source), et remise à zéro des offsets
@@ -53,7 +55,7 @@ while i < len(dir_data):
     i = body + size
 
 flux = {}
-for nom, offset in modules.items():
+for nom, offset in ({} if DEJA_FAIT else modules).items():
     data = ole.openstream('VBA/' + nom).read()
     source = bytes(decompress_stream(bytearray(data[offset:])))
     if nom == 'GenererCertificats':
@@ -63,25 +65,28 @@ for nom, offset in modules.items():
             '    Dim n As Integer, absents As String\r\n', '    Dim n As Integer\r\n')
         source = texte.encode('cp1252')
     flux['VBA/' + nom] = compress(source)           # source seul, sans p-code
-flux['VBA/dir'] = compress(bytes(dir_data))
-flux['VBA/_VBA_PROJECT'] = struct.pack('<HHBH', 0x61CC, 0xFFFF, 0x00, 0x0003)  # pas de cache : recompilation
-for n in ('PROJECT', 'PROJECTwm', 'PROJECTlk'):
-    if ole.exists(n):
-        flux[n] = ole.openstream(n).read()
-autres = ['/'.join(e) for e in ole.listdir() if '/'.join(e) not in flux and not e[-1].startswith('__SRP_')]
-assert not autres, f'flux non gérés : {autres}'   # (__SRP_* = caches, volontairement supprimés)
+if DEJA_FAIT:   # macro déjà modifiée (et compilée par Excel) : projet VBA conservé tel quel
+    vba_bin = zin.read('xl/vbaProject.bin')
+else:
+  flux['VBA/dir'] = compress(bytes(dir_data))
+  flux['VBA/_VBA_PROJECT'] = struct.pack('<HHBH', 0x61CC, 0xFFFF, 0x00, 0x0003)  # pas de cache : recompilation
+  for n in ('PROJECT', 'PROJECTwm', 'PROJECTlk'):
+      if ole.exists(n):
+          flux[n] = ole.openstream(n).read()
+  autres = ['/'.join(e) for e in ole.listdir() if '/'.join(e) not in flux and not e[-1].startswith('__SRP_')]
+  assert not autres, f'flux non gérés : {autres}'   # (__SRP_* = caches, volontairement supprimés)
 
-tmp = tempfile.mkdtemp(); os.chdir(tmp)
-date = VbaProject().default_date
-racine = RootDirectory(); racine.set_modified(date)
-vba = StorageDirectory('VBA'); vba.set_created(date); vba.set_modified(date)
-for chemin, data in flux.items():
-    fichier = chemin.replace('/', '_') + '.bin'
-    open(fichier, 'wb').write(data)
-    (vba if chemin.startswith('VBA/') else racine).add_directory(StreamDirectory(chemin.split('/')[-1], fichier))
-racine.add_directory(vba)
-o = OleFile(); o.root_directory = racine; o.create_file('vbaProject.bin')
-vba_bin = open('vbaProject.bin', 'rb').read()
+  tmp = tempfile.mkdtemp(); os.chdir(tmp)
+  date = VbaProject().default_date
+  racine = RootDirectory(); racine.set_modified(date)
+  vba = StorageDirectory('VBA'); vba.set_created(date); vba.set_modified(date)
+  for chemin, data in flux.items():
+      fichier = chemin.replace('/', '_') + '.bin'
+      open(fichier, 'wb').write(data)
+      (vba if chemin.startswith('VBA/') else racine).add_directory(StreamDirectory(chemin.split('/')[-1], fichier))
+  racine.add_directory(vba)
+  o = OleFile(); o.root_directory = racine; o.create_file('vbaProject.bin')
+  vba_bin = open('vbaProject.bin', 'rb').read()
 
 # ---------------------------------------------------------------- feuilles
 ss = zin.read('xl/sharedStrings.xml').decode('utf8')
@@ -98,8 +103,14 @@ ss = ss.replace('</sst>', '<si><t>R_Pression</t></si></sst>')
 ss = re.sub(r'uniqueCount="\d+"', f'uniqueCount="{uniques + 1}"', ss, count=1)
 ss = re.sub(r' count="(\d+)"', lambda m: f' count="{int(m.group(1)) + 1}"', ss, count=1)
 
-fc = zin.read('xl/worksheets/sheet2.xml').decode('utf8')        # Fiches clients
-assert 'name="Fiches clients" sheetId="2" r:id="rId2"' in zin.read('xl/workbook.xml').decode()
+wbxml = zin.read('xl/workbook.xml').decode('utf8'); wbrels = zin.read('xl/_rels/workbook.xml.rels').decode('utf8')
+def feuille(nom):
+    m = re.search(r'<sheet name="' + re.escape(nom) + r'" sheetId="(\d+)" r:id="([^"]+)"', wbxml)
+    cible = re.search(r'<Relationship Id="' + m.group(2) + r'"[^>]*Target="([^"]+)"', wbrels).group(1)
+    return m.group(1), 'xl/' + cible.lstrip('/').replace('xl/', '')
+id_fc, chemin_fc = feuille('Fiches clients')
+_, chemin_saisie = feuille('Saisie')
+fc = zin.read(chemin_fc).decode('utf8')
 assert '<c r="BS1"' not in fc and '<dimension ref="A1:BR2"/>' in fc
 ligne1 = re.search(r'<c r="BR1"[^>]*>.*?</c>', fc, re.S).group(0)
 style = re.search(r' s="(\d+)"', ligne1).group(1)
@@ -108,16 +119,15 @@ ligne2 = re.search(r'<c r="BR2"[^>]*>.*?</c>', fc, re.S).group(0)
 fc = fc.replace(ligne2, ligne2 + '<c r="BS2" t="str"><f>Saisie!$B$131&amp;""</f><v></v></c>')
 fc = fc.replace('<dimension ref="A1:BR2"/>', '<dimension ref="A1:BS2"/>').replace('spans="1:70"', 'spans="1:71"')
 
-saisie = zin.read('xl/worksheets/sheet1.xml').decode('utf8')
+saisie = zin.read(chemin_saisie).decode('utf8')
 assert re.search(r'<c r="A131"[^>]*><v>(\d+)</v>', saisie).group(1) and 'Pression de service du réservoir (bar)' in ss
 
 cc = zin.read('xl/calcChain.xml').decode('utf8')
-cc = cc.replace('<c r="BR2" i="2" l="1"/>', '<c r="BS2" i="2"/><c r="BR2" i="2" l="1"/>', 1) \
-    if '<c r="BR2" i="2" l="1"/>' in cc else cc.replace('</calcChain>', '<c r="BS2" i="2"/></calcChain>')
+cc = cc.replace('</calcChain>', f'<c r="BS2" i="{id_fc}"/></calcChain>')
 
 # ---------------------------------------------------------------- écriture
 nouveaux = {'xl/vbaProject.bin': vba_bin, 'xl/sharedStrings.xml': ss.encode('utf8'),
-            'xl/worksheets/sheet2.xml': fc.encode('utf8'), 'xl/calcChain.xml': cc.encode('utf8')}
+            chemin_fc: fc.encode('utf8'), 'xl/calcChain.xml': cc.encode('utf8')}
 with zipfile.ZipFile(out, 'w') as zout:
     for item in zin.infolist():
         zout.writestr(item, nouveaux.get(item.filename, zin.read(item.filename)), compress_type=zipfile.ZIP_DEFLATED)
